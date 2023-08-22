@@ -994,8 +994,11 @@ class OpenADRClient:
                             'modification_number': events[i]['event_descriptor']['modification_number'],
                             'event_id': events[i]['event_descriptor']['event_id']}
                            for i, event in enumerate(events)
-                           if event['response_required'] == 'always'
-                           and not utils.determine_event_status(event['active_period']) == 'completed']
+                           if event['response_required'] == 'always']
+                        #  and not utils.determine_event_status(event['active_period']) == 'completed'
+                        # This line breaks test A_E1_0340_TH_VTN which requires you to send a response
+                        # to a completed event. TODO: opt out of completed events instead of ignoring them
+
 
         if len(event_responses) > 0:
             logger.info(f"Total event_responses: {len(event_responses)}")
