@@ -17,6 +17,7 @@
 import asyncio
 import inspect
 import logging
+from random import randrange
 import ssl
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict
@@ -1046,6 +1047,20 @@ class OpenADRClient:
                 logger.error(f"An error occurred while executing your '{hook_name}': {hook}:"
                              f"{err.__class__.__name__}: {err}")
 
+    def _add_random_tolerance(self, event):
+        if event['active_period']['tolerance']:
+            max_tolerance = event['active_period']['tolerance']['tolerate']['startafter']
+            random_tolerance = randrange(max_tolerance.seconds + 1)
+            event_new_start_time = event['active_period']['dtstart'] + timedelta(seconds=random_tolerance)
+            logger.debug(
+                "receive event with max_tolerance of: %s, random_tolerance selected is: %s and start time of %s, the start will be changed to: %s",
+                max_tolerance,
+                random_tolerance,
+                event['active_period']['dtstart'],
+                event_new_start_time,
+            )
+            event['active_period']['dtstart'] = event_new_start_time
+
     async def _on_event(self, message):
         events = message['events']
         try:
@@ -1063,11 +1078,13 @@ class OpenADRClient:
                     else:
                         # Replace the event with the fresh copy
                         utils.pop_by(self.received_events, 'event_descriptor.event_id', event_id)
+                        self._add_random_tolerance(event)
                         self.received_events.append(event)
                         # Wait for the result of the on_update_event handler
                         result = await utils.await_if_required(self.on_update_event(event))
                 else:
                     # Wait for the result of the on_event
+                    self._add_random_tolerance(event)
                     self.received_events.append(event)
                     result = self.on_event(event)
                 if asyncio.iscoroutine(result):
@@ -1132,8 +1149,13 @@ class OpenADRClient:
         Periodic task that will clean up completed and cancelled events in our memory.
         """
         for event in self.received_events:
-            if event['event_descriptor']['event_status'] == 'cancelled' or \
-                    utils.determine_event_status(event['active_period']) == 'completed':
+            event_cancelled = event['event_descriptor']['event_status'] == 'cancelled'
+
+            # in case of event with tolerance we need to allow random event ending and not removing it immediatly(A_E1_0267_TH_VTN_1)
+            if event_cancelled and event['active_period']['tolerance'] and event['active_period']['dtstart'] > datetime.now(timezone.utc):
+                continue
+
+            if event_cancelled or utils.determine_event_status(event['active_period']) == 'completed':
                 logger.info(f"Removing event {event} because it is no longer relevant.")
                 self.received_events.pop(self.received_events.index(event))
 
