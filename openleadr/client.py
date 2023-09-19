@@ -75,6 +75,7 @@ class OpenADRClient:
         self.vtn_url = vtn_url.rstrip("/")
         self.ven_id = ven_id
         self.registration_id = None
+        self.registation_vtn_id = None
         self.poll_frequency = None
         self.vtn_fingerprint = vtn_fingerprint
         self.debug = debug
@@ -138,6 +139,8 @@ class OpenADRClient:
         response_type, response_payload = await self.query_registration()
         if 'registration_id' in response_payload:
             self.registration_id = response_payload['registration_id']
+        if 'vtn_id' in response_payload:
+            self.registation_vtn_id = response_payload['vtn_id']
         if response_payload and 'response' in response_payload  and 'request_id' in response_payload['response']:
             request_id = response_payload['response']['request_id']
 
@@ -467,6 +470,12 @@ class OpenADRClient:
         else:
             logger.error("No venID received from the VTN during registration. "
                          "Will assume that we are not or no longer registered.")
+            
+        if response_payload.get('vtn_id'):
+            self.registation_vtn_id = response_payload['vtn_id']
+        else:
+            logger.error("VTN did not send us its ID during registration. "
+                         "Will assume that we are not or no longer registered.")
 
         if self.registration_id:
             self.poll_frequency = response_payload.get('requested_oadr_poll_freq',
@@ -513,6 +522,7 @@ class OpenADRClient:
             logger.info("VEN successfully un-registered")
             # Update/Delete all the registration and reports information
             self.registration_id = None
+            self.registation_vtn_id = None
             self.report_requests = None
             self.reports = None
             self.report_callbacks = None
@@ -863,6 +873,7 @@ class OpenADRClient:
         service = 'EiRegisterParty'
         response_type, response_payload = await self._perform_request(service, message)
         self.registration_id = None
+        self.registation_vtn_id = None
         logger.info(response_type, response_payload)
 
     ###########################################################################
@@ -946,6 +957,23 @@ class OpenADRClient:
                              f"{err.__class__.__name__}: {err}")
 
     async def _on_event(self, message):
+        # Validate that the message came from the correct vtn
+        # This is required by test E1_1080_TH_VTN_1
+        # TODO: Maybe this should be for all messages recevied?
+        if message['vtn_id'] != self.registation_vtn_id:
+            logger.error("Received oadrDistributeEvent payload with invalid vtn_id")
+            response = {'response_code': 452,
+                        'response_description': 'Invalid VTN ID received.',
+                        'request_id': message['request_id']}
+            message = self._create_message('oadrCreatedEvent',
+                                           response=response,
+                                           event_responses=None,
+                                           ven_id=self.ven_id)
+            service = 'EiEvent'
+            response_type, response_payload = await self._perform_request(service, message)
+            logger.info(response_type, response_payload)
+            return
+
         events = message['events']
         try:
             results = []
